@@ -49,7 +49,7 @@ router.get("/resolve/:brandSlug/:storeSlug", asyncHandler(async (req, res) => {
       },
       tables: {
         where: { isActive: true },
-        select: { tableNumber: true }
+        select: { id: true, tableNumber: true } // id is needed by the customer app to raise waiter calls
       }
     }
   });

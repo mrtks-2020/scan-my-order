@@ -2,6 +2,20 @@ const { getPrismaClient } = require("../../lib/prisma");
 const { createHttpError } = require("../../middleware/error-handler");
 const { userRoles } = require("../../constants/roles");
 const { DEFAULT_IMAGES } = require("@smo/shared");
+const { RESERVATION_HOLD_MINUTES, LIVE_RESERVATION_STATUSES } = require("../reservations/reservation-service");
+
+function serializeReservation(r) {
+  return {
+    id: r.id,
+    guestName: r.guestName,
+    guestPhone: r.guestPhone,
+    partySize: r.partySize,
+    notes: r.notes,
+    startsAt: r.startsAt,
+    endsAt: r.endsAt,
+    status: r.status
+  };
+}
 
 // Helper to format store and provide default images
 function serializeStore(store) {
@@ -300,11 +314,38 @@ async function deleteStore(actor, storeId) {
   return { success: true };
 }
 
-async function getStoreFloorStatus(actor, storeId) {
+async function getStoreFloorStatus(actor, storeId, options = {}) {
   const prisma = getPrismaClient();
-  
+
   // Verify access first
   await getStoreById(actor, storeId);
+
+  const now = new Date();
+  const holdMs = RESERVATION_HOLD_MINUTES * 60 * 1000;
+
+  // "Today" for the reservations KPI. The dashboard passes its local-day boundaries so the
+  // count matches what staff see on their clock; fall back to the server's local day.
+  let dayStart = options.dayStart ? new Date(options.dayStart) : null;
+  let dayEnd = options.dayEnd ? new Date(options.dayEnd) : null;
+  if (!dayStart || Number.isNaN(dayStart.getTime()) || !dayEnd || Number.isNaN(dayEnd.getTime())) {
+    dayStart = new Date(now); dayStart.setHours(0, 0, 0, 0);
+    dayEnd = new Date(dayStart); dayEnd.setDate(dayEnd.getDate() + 1);
+  }
+
+  const todaysReservations = await prisma.tableReservation.findMany({
+    where: {
+      storeId,
+      status: { not: 'CANCELLED' },
+      startsAt: { gte: dayStart, lt: dayEnd }
+    },
+    select: { status: true, startsAt: true, partySize: true }
+  });
+  const reservationsToday = {
+    total: todaysReservations.length,
+    upcoming: todaysReservations.filter(r => r.status === 'CONFIRMED' && r.startsAt > now).length,
+    seated: todaysReservations.filter(r => r.status === 'SEATED').length,
+    guests: todaysReservations.reduce((sum, r) => sum + (r.partySize || 0), 0)
+  };
 
   const orders = await prisma.order.findMany({
     where: {
@@ -338,7 +379,9 @@ async function getStoreFloorStatus(actor, storeId) {
     }
   });
 
-  // Fetch all tables with their active orders and unresolved waiter calls
+  // Fetch all tables with their active orders and unresolved waiter calls.
+  // All unsettled orders are fetched (not just the latest) so the floor plan
+  // reflects the table's full running tab across multiple order batches.
   const rawTables = await prisma.table.findMany({
     where: {
       storeId,
@@ -352,8 +395,7 @@ async function getStoreFloorStatus(actor, storeId) {
             in: ['DRAFT', 'PENDING_PAYMENT', 'PENDING_VERIFICATION', 'PROCESSING', 'READY', 'SERVED']
           }
         },
-        orderBy: { createdAt: 'desc' },
-        take: 1,
+        orderBy: { createdAt: 'asc' },
         include: {
           items: {
             include: {
@@ -371,41 +413,91 @@ async function getStoreFloorStatus(actor, storeId) {
       sessions: {
         where: { status: 'ACTIVE' },
         take: 1
+      },
+      // Reservations whose hold window is live right now, plus anything later today-ish
+      // for the drawer's "Upcoming" list.
+      reservations: {
+        where: {
+          status: { in: LIVE_RESERVATION_STATUSES },
+          endsAt: { gt: now }
+        },
+        orderBy: { startsAt: 'asc' },
+        take: 5
       }
     }
   });
 
   const tables = rawTables.map((tbl) => {
-    const activeOrder = tbl.orders[0] || null;
+    // A reservation "holds" the table from RESERVATION_HOLD_MINUTES before startsAt until endsAt
+    const upcomingReservations = tbl.reservations || [];
+    const activeReservation = upcomingReservations.find(r =>
+      r.startsAt.getTime() - holdMs <= now.getTime() && now < r.endsAt
+    ) || null;
     const activeSession = tbl.sessions?.[0] || null;
     const activeCalls = tbl.waiterCalls || [];
     const hasWaiterCall = activeCalls.length > 0;
     const billCall = activeCalls.find(c => c.type === 'BILL');
 
+    // Orders belonging to the current dining session. If there is no active
+    // session (legacy/POS edge cases) fall back to every unsettled order on the table.
+    const sessionOrders = activeSession
+      ? tbl.orders.filter(o => o.tableSessionId === activeSession.id)
+      : tbl.orders;
+    const latestOrder = sessionOrders[sessionOrders.length - 1] || null;
+
+    // Table status reflects the most action-worthy batch, not just the latest one:
+    // NEEDS_VERIFICATION (waiter must approve a QR postpaid order) > READY (needs delivering)
+    // > PROCESSING (cooking) > OCCUPIED (awaiting online payment) > SERVED (awaiting bill)
+    const orderStatuses = new Set(sessionOrders.map(o => o.status));
     let status = 'AVAILABLE';
     if (billCall) {
       status = 'BILL_REQUESTED';
     } else if (hasWaiterCall) {
       status = 'ATTENTION';
-    } else if (activeOrder) {
-      if (activeOrder.status === 'READY') {
-        status = 'READY';
-      } else if (activeOrder.status === 'PROCESSING') {
-        status = 'PROCESSING';
-      } else if (activeOrder.status === 'SERVED') {
-        status = 'SERVED';
-      } else {
-        status = 'OCCUPIED'; // DRAFT, PENDING_PAYMENT, PENDING_VERIFICATION
+    } else if (orderStatuses.has('PENDING_VERIFICATION')) {
+      status = 'NEEDS_VERIFICATION';
+    } else if (orderStatuses.has('READY')) {
+      status = 'READY';
+    } else if (orderStatuses.has('PROCESSING')) {
+      status = 'PROCESSING';
+    } else if (orderStatuses.has('PENDING_PAYMENT') || orderStatuses.has('DRAFT')) {
+      status = 'OCCUPIED';
+    } else if (orderStatuses.has('SERVED')) {
+      status = 'SERVED';
+    } else if (activeReservation) {
+      // A reservation only claims an otherwise-empty table; live orders always take precedence
+      status = 'RESERVED';
+    }
+
+    // Merge identical items across batches so the tab reads like a single bill
+    const mergedItems = new Map();
+    for (const order of sessionOrders) {
+      for (const item of order.items) {
+        const name = item.menuItem?.name || 'Item';
+        const key = `${item.menuItemId}_${item.priceAtOrder}`;
+        const existing = mergedItems.get(key);
+        if (existing) {
+          existing.quantity += item.quantity;
+        } else {
+          mergedItems.set(key, { name, quantity: item.quantity, priceAtOrder: item.priceAtOrder });
+        }
       }
     }
 
     return {
       id: tbl.id,
       tableNumber: tbl.tableNumber,
+      capacity: tbl.capacity,
       isActive: tbl.isActive,
       status,
       activePin: activeSession?.pin || null,
       activeSessionId: activeSession?.id || null,
+      // The reservation currently holding the table (if any) — shown as a tag even when orders are live
+      reservation: activeReservation ? serializeReservation(activeReservation) : null,
+      // Later bookings on this table, for the drawer
+      upcomingReservations: upcomingReservations
+        .filter(r => r.id !== activeReservation?.id)
+        .map(serializeReservation),
       hasWaiterCall,
       activeWaiterCalls: activeCalls.map(c => ({
         id: c.id,
@@ -413,19 +505,18 @@ async function getStoreFloorStatus(actor, storeId) {
         status: c.status,
         createdAt: c.createdAt
       })),
-      currentOrder: activeOrder ? {
-        id: activeOrder.id,
-        status: activeOrder.status,
-        origin: activeOrder.origin,
-        paymentModel: activeOrder.paymentModel,
-        totalAmount: activeOrder.totalAmount,
-        createdAt: activeOrder.createdAt,
-        itemsCount: activeOrder.items.reduce((sum, item) => sum + item.quantity, 0),
-        items: activeOrder.items.map(i => ({
-          name: i.menuItem?.name || 'Item',
-          quantity: i.quantity,
-          priceAtOrder: i.priceAtOrder
-        }))
+      // `currentOrder` is the table's whole running tab (all batches in the session),
+      // not a single order. `id`/`status`/`origin` describe the latest batch.
+      currentOrder: latestOrder ? {
+        id: latestOrder.id,
+        status: latestOrder.status,
+        origin: latestOrder.origin,
+        paymentModel: latestOrder.paymentModel,
+        totalAmount: sessionOrders.reduce((sum, o) => sum + o.totalAmount, 0),
+        createdAt: sessionOrders[0].createdAt,
+        ordersCount: sessionOrders.length,
+        itemsCount: sessionOrders.reduce((sum, o) => sum + o.items.reduce((s, i) => s + i.quantity, 0), 0),
+        items: Array.from(mergedItems.values())
       } : null
     };
   });
@@ -434,6 +525,7 @@ async function getStoreFloorStatus(actor, storeId) {
     orders,
     activeTables,
     waiterCalls,
+    reservationsToday,
     tables
   };
 }

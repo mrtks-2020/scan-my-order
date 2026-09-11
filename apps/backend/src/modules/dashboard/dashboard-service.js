@@ -50,11 +50,12 @@ async function getDashboardMetrics(user) {
     ]);
   }
 
-  const totalRevenue = (revenueAggregate._sum.totalAmount || 0) / 100;
+  // totalAmount is stored in whole rupees (converted to paise only at the payment-gateway boundary)
+  const totalRevenue = revenueAggregate._sum.totalAmount || 0;
 
   return {
     metrics: [
-      { title: "Total Revenue", value: `₹${totalRevenue.toFixed(2)}`, trend: "+12.5%" },
+      { title: "Total Revenue", value: `₹${totalRevenue.toLocaleString("en-IN")}`, trend: "+12.5%" },
       { title: "Active Stores", value: storesCount.toString(), trend: "+2" },
       { title: "Total Staff", value: usersCount.toString(), trend: "+5%" },
       { title: "Active Orders", value: "24", trend: "+10%" },

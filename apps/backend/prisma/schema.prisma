@@ -163,6 +163,7 @@ model Store {
   orders       Order[]
   waiterCalls  WaiterCall[]
   feedbacks    Feedback[]
+  reservations TableReservation[]
   googleReviewUrl String?
   
   // Array of { name: string, rate: number } e.g. [{"name": "CGST", "rate": 2.5}]
@@ -197,6 +198,7 @@ model User {
   staffOrders    Order[] @relation("StaffOrders")
   customerOrders Order[] @relation("CustomerOrders")
   resolvedCalls WaiterCall[]
+  createdReservations TableReservation[]
 
   @@unique([tenantId, email])
   @@index([role])
@@ -279,7 +281,7 @@ model MenuItem {
   category           MenuCategory      @relation(fields: [categoryId], references: [id], onDelete: Cascade)
   name               String
   description        String?
-  price              Int               // Stored in smallest currency unit
+  price              Int               // Whole rupees. Converted to paise only at the Razorpay boundary (order-service)
   image              String?
   dietary            DietaryPreference @default(VEG)
   spiceLevel         SpiceLevel        @default(NONE)
@@ -378,16 +380,48 @@ model Table {
   storeId     String
   store       Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
   tableNumber Int
+  capacity    Int      @default(4)   // number of guests the table seats
   isActive    Boolean  @default(true)
-  
+
   orders      Order[]
   sessions    TableSession[]
   waiterCalls WaiterCall[]
+  reservations TableReservation[]
 
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
   @@unique([storeId, tableNumber])
+}
+
+enum ReservationStatus {
+  CONFIRMED
+  SEATED
+  CANCELLED
+  COMPLETED
+}
+
+model TableReservation {
+  id          String            @id @default(cuid())
+  storeId     String
+  store       Store             @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  tableId     String
+  table       Table             @relation(fields: [tableId], references: [id], onDelete: Cascade)
+  guestName   String
+  guestPhone  String?
+  partySize   Int?
+  notes       String?
+  startsAt    DateTime
+  endsAt      DateTime
+  status      ReservationStatus @default(CONFIRMED)
+  createdById String?
+  createdBy   User?             @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  @@index([storeId, startsAt])
+  @@index([tableId, status, startsAt])
 }
 
 enum DiscountType {

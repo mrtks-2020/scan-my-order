@@ -111,7 +111,7 @@ export const Dashboard = () => {
                      </div>
                      <div className="flex items-center gap-4">
                         <span className="text-xs px-2 py-1 bg-zinc-100 dark:bg-zinc-800 rounded text-zinc-600 dark:text-zinc-300">{order.status}</span>
-                        <span className="text-sm font-bold">₹{order.totalAmount / 100}</span>
+                        <span className="text-sm font-bold">₹{order.totalAmount.toLocaleString('en-IN')}</span>
                      </div>
                    </div>
                  ))}

@@ -11,7 +11,10 @@ import {
   ZoomInAreaIcon,
   ZoomOutAreaIcon,
   RefreshIcon,
-  UserGroupIcon
+  UserGroupIcon,
+  BookmarkAdd01Icon,
+  Bookmark01Icon,
+  Call02Icon
 } from 'hugeicons-react';
 
 // Status configurations
@@ -32,19 +35,27 @@ export const TABLE_STATUS_CONFIG = {
     svgGrad: 'grad-occupied',
     description: 'Guests seated & ordering'
   },
+  NEEDS_VERIFICATION: {
+    label: 'Needs Verification',
+    color: '#8B5CF6',
+    bgColor: 'bg-violet-500/10 text-violet-600 dark:text-violet-400 border-violet-500/30',
+    dotColor: 'bg-violet-500',
+    svgGrad: 'grad-verify',
+    description: 'QR postpaid order awaiting waiter approval'
+  },
   PROCESSING: {
     label: 'Cooking',
-    color: '#F59E0B',
-    bgColor: 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/30',
-    dotColor: 'bg-amber-500',
+    color: '#F97316',
+    bgColor: 'bg-orange-500/10 text-orange-600 dark:text-orange-400 border-orange-500/30',
+    dotColor: 'bg-orange-500',
     svgGrad: 'grad-processing',
     description: 'In kitchen preparation'
   },
   READY: {
     label: 'Food Ready',
-    color: '#8B5CF6',
-    bgColor: 'bg-purple-500/10 text-purple-600 dark:text-purple-400 border-purple-500/30',
-    dotColor: 'bg-purple-500',
+    color: '#EAB308',
+    bgColor: 'bg-yellow-500/10 text-yellow-600 dark:text-yellow-400 border-yellow-500/30',
+    dotColor: 'bg-yellow-500',
     svgGrad: 'grad-ready',
     description: 'Ready on kitchen pass'
   },
@@ -58,9 +69,9 @@ export const TABLE_STATUS_CONFIG = {
   },
   BILL_REQUESTED: {
     label: 'Bill Requested',
-    color: '#EAB308',
-    bgColor: 'bg-yellow-500/10 text-yellow-600 dark:text-yellow-400 border-yellow-500/30',
-    dotColor: 'bg-yellow-500',
+    color: '#EC4899',
+    bgColor: 'bg-pink-500/10 text-pink-600 dark:text-pink-400 border-pink-500/30',
+    dotColor: 'bg-pink-500',
     svgGrad: 'grad-bill',
     description: 'Bill called / payment pending'
   },
@@ -71,8 +82,90 @@ export const TABLE_STATUS_CONFIG = {
     dotColor: 'bg-red-500',
     svgGrad: 'grad-attention',
     description: 'Needs staff assistance'
+  },
+  RESERVED: {
+    label: 'Reserved',
+    color: '#64748B',
+    bgColor: 'bg-slate-500/10 text-slate-600 dark:text-slate-400 border-slate-500/30',
+    dotColor: 'bg-slate-500',
+    svgGrad: 'grad-reserved',
+    description: 'Held for a booked guest'
   }
 };
+
+const formatTime = (iso) =>
+  new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+const formatDateTime = (iso) =>
+  new Date(iso).toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+
+// Silhouettes are drawn for 1..10 seats; bigger tables reuse the 10-seat layout (labels still show the real count)
+export const MAX_DRAWN_SEATS = 10;
+
+/**
+ * Geometry for a table with `seats` chairs, centred on (0,0).
+ * Returns { kind: 'round', r, chairs } or { kind: 'rect', w, h, chairs },
+ * where each chair is { x, y, w, h, rotate } (centre point + rotation in degrees).
+ */
+function seatLayout(seats) {
+  const n = Math.min(MAX_DRAWN_SEATS, Math.max(1, seats));
+
+  // --- 1–4 seats: round table, chairs evenly around the rim, rotated to face inward ---
+  if (n <= 4) {
+    const r = n <= 2 ? 26 : 32;
+    const chairW = n <= 2 ? 28 : 30;
+    const chairH = 10;
+    const dist = r + 4 + chairH / 2;          // chair centre sits just outside the rim
+    const chairs = Array.from({ length: n }, (_, i) => {
+      // start at the top (−90°) and go clockwise
+      const angle = -90 + (360 / n) * i;
+      const rad = (angle * Math.PI) / 180;
+      return {
+        x: Math.cos(rad) * dist,
+        y: Math.sin(rad) * dist,
+        w: chairW,
+        h: chairH,
+        rotate: angle + 90                    // tangent to the circle
+      };
+    });
+    return { kind: 'round', r, chairs };
+  }
+
+  // --- 5–10 seats: rectangle. Chairs on the long edges; odd counts / 9+ put chairs at the ends ---
+  const chairW = 22, chairH = 9, pitch = 26, gap = 3;
+  let perSideTop, perSideBottom, ends;
+  switch (n) {
+    case 5:  perSideTop = 3; perSideBottom = 2; ends = 0; break;
+    case 6:  perSideTop = 3; perSideBottom = 3; ends = 0; break;
+    case 7:  perSideTop = 3; perSideBottom = 3; ends = 1; break;
+    case 8:  perSideTop = 4; perSideBottom = 4; ends = 0; break;
+    case 9:  perSideTop = 4; perSideBottom = 4; ends = 1; break;
+    default: perSideTop = 4; perSideBottom = 4; ends = 2; break; // 10
+  }
+  const longest = Math.max(perSideTop, perSideBottom);
+  const w = longest * pitch + 10;
+  const h = 54;
+
+  const rowChairs = (count, y) => {
+    const span = (count - 1) * pitch;
+    return Array.from({ length: count }, (_, i) => ({
+      x: -span / 2 + i * pitch,
+      y,
+      w: chairW,
+      h: chairH,
+      rotate: 0
+    }));
+  };
+
+  const chairs = [
+    ...rowChairs(perSideTop, -h / 2 - gap - chairH / 2),
+    ...rowChairs(perSideBottom, h / 2 + gap + chairH / 2)
+  ];
+  // End chairs (head of table): right first, then left
+  if (ends >= 1) chairs.push({ x: w / 2 + gap + chairH / 2, y: 0, w: chairW, h: chairH, rotate: 90 });
+  if (ends >= 2) chairs.push({ x: -w / 2 - gap - chairH / 2, y: 0, w: chairW, h: chairH, rotate: 90 });
+
+  return { kind: 'rect', w, h, chairs };
+}
 
 // Computes geometric positions for restaurant tables evenly across the canvas
 function computeFloorLayout(tables = []) {
@@ -91,13 +184,11 @@ function computeFloorLayout(tables = []) {
     const row = Math.floor(index / cols);
     const x = startX + col * colWidth;
     const y = startY + row * rowHeight;
-    const shape = index % 3 === 0 ? 'round-4' : index % 3 === 1 ? 'square-4' : 'rectangle-6';
-
+    // Silhouette (shape + chair count) is derived from capacity in renderTableShape
     return {
       ...tbl,
       x,
       y,
-      shape: tbl.shape || shape,
       capacity: tbl.capacity || 4
     };
   });
@@ -109,182 +200,91 @@ const SvgTableElement = ({ table, isSelected, onSelect }) => {
   const isAttention = table.status === 'ATTENTION' || table.hasWaiterCall;
   const isReady = table.status === 'READY';
   const isBill = table.status === 'BILL_REQUESTED';
+  const isVerify = table.status === 'NEEDS_VERIFICATION';
+  const isReserved = table.status === 'RESERVED';
+  const reservedFor = table.reservation?.guestName || null;
 
   const glowId = isAttention
     ? 'url(#glow-red)'
-    : isReady
-      ? 'url(#glow-purple)'
-      : isSelected
-        ? 'url(#glow-selected)'
-        : 'url(#shadow-subtle)';
+    : isVerify
+      ? 'url(#glow-verify)'
+      : isReady
+        ? 'url(#glow-ready)'
+        : isSelected
+          ? 'url(#glow-selected)'
+          : 'url(#shadow-subtle)';
 
-  // Renders the specific SVG table silhouette with chairs
+  // Renders the table silhouette with one chair per seat (1–10 drawn; larger capacities use the 10-chair layout).
+  // 1–4 seats: round top, chairs spaced evenly around the rim.
+  // 5–10 seats: rectangular top that grows with the count; chairs along the long edges,
+  //             extras at the two ends (head of table).
   const renderTableShape = () => {
-    switch (table.shape) {
-      case 'round-2': {
-        const r = 26;
-        return (
-          <g className="table-shape-group">
-            {/* Top Chair */}
-            <rect x="-14" y={-r - 14} width="28" height="10" rx="4" fill="#3f3f46" stroke="#27272a" strokeWidth="1.5" />
-            {/* Bottom Chair */}
-            <rect x="-14" y={r + 4} width="28" height="10" rx="4" fill="#3f3f46" stroke="#27272a" strokeWidth="1.5" />
-            {/* Table Top */}
-            <circle
-              cx="0"
-              cy="0"
-              r={r}
-              fill={`url(#${cfg.svgGrad})`}
-              stroke={cfg.color}
-              strokeWidth={isSelected ? 3 : 2}
-              filter={glowId}
-            />
-            {/* Inner rim highlight */}
-            <circle cx="0" cy="0" r={r - 4} fill="none" stroke="rgba(255,255,255,0.15)" strokeWidth="1" />
-          </g>
-        );
-      }
+    const seats = Math.min(MAX_DRAWN_SEATS, Math.max(1, table.capacity || 4));
+    const layout = seatLayout(seats);
+    const chairFill = '#3f3f46';
+    const chairStroke = '#27272a';
 
-      case 'round-4': {
-        const r = 32;
-        return (
-          <g className="table-shape-group">
-            {/* 4 Chairs (Top, Bottom, Left, Right) */}
-            <rect x="-16" y={-r - 14} width="32" height="10" rx="4" fill="#3f3f46" stroke="#27272a" strokeWidth="1.5" />
-            <rect x="-16" y={r + 4} width="32" height="10" rx="4" fill="#3f3f46" stroke="#27272a" strokeWidth="1.5" />
-            <rect x={-r - 14} y="-16" width="10" height="32" rx="4" fill="#3f3f46" stroke="#27272a" strokeWidth="1.5" />
-            <rect x={r + 4} y="-16" width="10" height="32" rx="4" fill="#3f3f46" stroke="#27272a" strokeWidth="1.5" />
-            {/* Table Top */}
-            <circle
-              cx="0"
-              cy="0"
-              r={r}
-              fill={`url(#${cfg.svgGrad})`}
-              stroke={cfg.color}
-              strokeWidth={isSelected ? 3 : 2}
-              filter={glowId}
-            />
-            <circle cx="0" cy="0" r={r - 4} fill="none" stroke="rgba(255,255,255,0.15)" strokeWidth="1" />
-          </g>
-        );
-      }
+    const chairs = layout.chairs.map((c, i) => (
+      <rect
+        key={i}
+        x={-c.w / 2}
+        y={-c.h / 2}
+        width={c.w}
+        height={c.h}
+        rx="3"
+        fill={chairFill}
+        stroke={chairStroke}
+        strokeWidth="1.5"
+        transform={`translate(${c.x} ${c.y}) rotate(${c.rotate || 0})`}
+      />
+    ));
 
-      case 'rectangle-6': {
-        const w = 96;
-        const h = 54;
-        return (
-          <g className="table-shape-group">
-            {/* Top 3 Chairs */}
-            <rect x="-42" y={-h / 2 - 12} width="24" height="9" rx="3" fill="#3f3f46" stroke="#27272a" strokeWidth="1.5" />
-            <rect x="-12" y={-h / 2 - 12} width="24" height="9" rx="3" fill="#3f3f46" stroke="#27272a" strokeWidth="1.5" />
-            <rect x="18" y={-h / 2 - 12} width="24" height="9" rx="3" fill="#3f3f46" stroke="#27272a" strokeWidth="1.5" />
-            {/* Bottom 3 Chairs */}
-            <rect x="-42" y={h / 2 + 3} width="24" height="9" rx="3" fill="#3f3f46" stroke="#27272a" strokeWidth="1.5" />
-            <rect x="-12" y={h / 2 + 3} width="24" height="9" rx="3" fill="#3f3f46" stroke="#27272a" strokeWidth="1.5" />
-            <rect x="18" y={h / 2 + 3} width="24" height="9" rx="3" fill="#3f3f46" stroke="#27272a" strokeWidth="1.5" />
-            {/* Table Top */}
-            <rect
-              x={-w / 2}
-              y={-h / 2}
-              width={w}
-              height={h}
-              rx="8"
-              fill={`url(#${cfg.svgGrad})`}
-              stroke={cfg.color}
-              strokeWidth={isSelected ? 3 : 2}
-              filter={glowId}
-            />
-            <rect
-              x={-w / 2 + 4}
-              y={-h / 2 + 4}
-              width={w - 8}
-              height={h - 8}
-              rx="6"
-              fill="none"
-              stroke="rgba(255,255,255,0.15)"
-              strokeWidth="1"
-            />
-          </g>
-        );
-      }
-
-      case 'booth': {
-        const w = 68;
-        const h = 58;
-        return (
-          <g className="table-shape-group">
-            {/* Left Banquette Backrest */}
-            <path
-              d={`M ${-w / 2 - 12} ${-h / 2 - 6} Q ${-w / 2 - 18} 0 ${-w / 2 - 12} ${h / 2 + 6} L ${-w / 2 - 4} ${h / 2 + 6} L ${-w / 2 - 4} ${-h / 2 - 6} Z`}
-              fill="#27272a"
-              stroke="#18181b"
-              strokeWidth="1.5"
-            />
-            {/* Top & Bottom Booth Seats */}
-            <rect x={-w / 2 + 2} y={-h / 2 - 12} width={w - 4} height="9" rx="3" fill="#3f3f46" stroke="#27272a" strokeWidth="1.5" />
-            <rect x={-w / 2 + 2} y={h / 2 + 3} width={w - 4} height="9" rx="3" fill="#3f3f46" stroke="#27272a" strokeWidth="1.5" />
-            {/* Center Table */}
-            <rect
-              x={-w / 2}
-              y={-h / 2}
-              width={w}
-              height={h}
-              rx="6"
-              fill={`url(#${cfg.svgGrad})`}
-              stroke={cfg.color}
-              strokeWidth={isSelected ? 3 : 2}
-              filter={glowId}
-            />
-            <rect
-              x={-w / 2 + 4}
-              y={-h / 2 + 4}
-              width={w - 8}
-              height={h - 8}
-              rx="4"
-              fill="none"
-              stroke="rgba(255,255,255,0.15)"
-              strokeWidth="1"
-            />
-          </g>
-        );
-      }
-
-      case 'square-4':
-      default: {
-        const size = 56;
-        return (
-          <g className="table-shape-group">
-            {/* 4 Chairs */}
-            <rect x="-15" y={-size / 2 - 12} width="30" height="9" rx="3" fill="#3f3f46" stroke="#27272a" strokeWidth="1.5" />
-            <rect x="-15" y={size / 2 + 3} width="30" height="9" rx="3" fill="#3f3f46" stroke="#27272a" strokeWidth="1.5" />
-            <rect x={-size / 2 - 12} y="-15" width="9" height="30" rx="3" fill="#3f3f46" stroke="#27272a" strokeWidth="1.5" />
-            <rect x={size / 2 + 3} y="-15" width="9" height="30" rx="3" fill="#3f3f46" stroke="#27272a" strokeWidth="1.5" />
-            {/* Table Top */}
-            <rect
-              x={-size / 2}
-              y={-size / 2}
-              width={size}
-              height={size}
-              rx="8"
-              fill={`url(#${cfg.svgGrad})`}
-              stroke={cfg.color}
-              strokeWidth={isSelected ? 3 : 2}
-              filter={glowId}
-            />
-            <rect
-              x={-size / 2 + 4}
-              y={-size / 2 + 4}
-              width={size - 8}
-              height={size - 8}
-              rx="5"
-              fill="none"
-              stroke="rgba(255,255,255,0.15)"
-              strokeWidth="1"
-            />
-          </g>
-        );
-      }
+    if (layout.kind === 'round') {
+      const r = layout.r;
+      return (
+        <g className="table-shape-group">
+          {chairs}
+          <circle
+            cx="0"
+            cy="0"
+            r={r}
+            fill={`url(#${cfg.svgGrad})`}
+            stroke={cfg.color}
+            strokeWidth={isSelected ? 3 : 2}
+            filter={glowId}
+          />
+          <circle cx="0" cy="0" r={r - 4} fill="none" stroke="rgba(255,255,255,0.15)" strokeWidth="1" />
+        </g>
+      );
     }
+
+    const { w, h } = layout;
+    return (
+      <g className="table-shape-group">
+        {chairs}
+        <rect
+          x={-w / 2}
+          y={-h / 2}
+          width={w}
+          height={h}
+          rx="8"
+          fill={`url(#${cfg.svgGrad})`}
+          stroke={cfg.color}
+          strokeWidth={isSelected ? 3 : 2}
+          filter={glowId}
+        />
+        <rect
+          x={-w / 2 + 4}
+          y={-h / 2 + 4}
+          width={w - 8}
+          height={h - 8}
+          rx="6"
+          fill="none"
+          stroke="rgba(255,255,255,0.15)"
+          strokeWidth="1"
+        />
+      </g>
+    );
   };
 
   return (
@@ -309,9 +309,9 @@ const SvgTableElement = ({ table, isSelected, onSelect }) => {
         </>
       )}
 
-      {/* Gentle Violet Pulse for READY food */}
+      {/* Gentle Yellow Pulse for READY food */}
       {isReady && (
-        <circle cx="0" cy="0" r="34" stroke="#8B5CF6" strokeWidth="2" fill="none" opacity="0.75">
+        <circle cx="0" cy="0" r="34" stroke="#EAB308" strokeWidth="2" fill="none" opacity="0.75">
           <animate attributeName="r" values="32;48;58" dur="2.2s" repeatCount="indefinite" />
           <animate attributeName="opacity" values="0.75;0.2;0" dur="2.2s" repeatCount="indefinite" />
         </circle>
@@ -332,7 +332,7 @@ const SvgTableElement = ({ table, isSelected, onSelect }) => {
         {/* Table Number */}
         <text
           x="0"
-          y={table.currentOrder ? -4 : 4}
+          y={table.currentOrder || reservedFor ? -4 : 4}
           textAnchor="middle"
           dominantBaseline="central"
           fill="#ffffff"
@@ -344,8 +344,8 @@ const SvgTableElement = ({ table, isSelected, onSelect }) => {
           {table.tableNumber}
         </text>
 
-        {/* Small badge / sub-label */}
-        {table.currentOrder && (
+        {/* Small badge / sub-label: running total, or the guest it is held for */}
+        {table.currentOrder ? (
           <text
             x="0"
             y="11"
@@ -355,9 +355,21 @@ const SvgTableElement = ({ table, isSelected, onSelect }) => {
             fontSize="9"
             fontWeight="600"
           >
-            ₹{Math.round(table.currentOrder.totalAmount / 100)}
+            ₹{table.currentOrder.totalAmount}
           </text>
-        )}
+        ) : reservedFor ? (
+          <text
+            x="0"
+            y="11"
+            textAnchor="middle"
+            dominantBaseline="central"
+            fill="rgba(255,255,255,0.9)"
+            fontSize="8"
+            fontWeight="600"
+          >
+            {reservedFor.length > 10 ? `${reservedFor.slice(0, 9)}…` : reservedFor}
+          </text>
+        ) : null}
 
         {/* Status Indicator Icon Badge in Top-Right Corner */}
         {isAttention ? (
@@ -367,13 +379,24 @@ const SvgTableElement = ({ table, isSelected, onSelect }) => {
           </g>
         ) : isBill ? (
           <g transform="translate(18, -20)">
-            <circle cx="0" cy="0" r="8" fill="#EAB308" stroke="#ffffff" strokeWidth="1.5" />
+            <circle cx="0" cy="0" r="8" fill="#EC4899" stroke="#ffffff" strokeWidth="1.5" />
             <text x="0" y="3.5" textAnchor="middle" fill="#ffffff" fontSize="8" fontWeight="bold">₹</text>
+          </g>
+        ) : isVerify ? (
+          <g transform="translate(18, -20)">
+            <circle cx="0" cy="0" r="8" fill="#8B5CF6" stroke="#ffffff" strokeWidth="1.5" />
+            <text x="0" y="3.5" textAnchor="middle" fill="#ffffff" fontSize="9" fontWeight="bold">?</text>
           </g>
         ) : isReady ? (
           <g transform="translate(18, -20)">
-            <circle cx="0" cy="0" r="8" fill="#8B5CF6" stroke="#ffffff" strokeWidth="1.5" />
+            <circle cx="0" cy="0" r="8" fill="#EAB308" stroke="#ffffff" strokeWidth="1.5" />
             <text x="0" y="3" textAnchor="middle" fill="#ffffff" fontSize="8" fontWeight="bold">✓</text>
+          </g>
+        ) : isReserved || reservedFor ? (
+          <g transform="translate(18, -20)">
+            <circle cx="0" cy="0" r="8" fill="#64748B" stroke="#ffffff" strokeWidth="1.5" />
+            {/* bookmark glyph */}
+            <path d="M-3 -4 h6 v8 l-3 -2.5 l-3 2.5 z" fill="#ffffff" />
           </g>
         ) : null}
       </g>
@@ -386,10 +409,14 @@ export const LiveTableFloorPlan = ({
   onSelectTable,
   onResolveWaiterCall,
   onOpenPOS,
+  onReserveTable,          // (table) => void — opens the reserve dialog
+  onSeatReservation,       // (reservationId) => Promise
+  onCancelReservation,     // (reservationId) => Promise
   className = ''
 }) => {
-  const [selectedTable, setSelectedTable] = useState(null);
+  const [selectedTableId, setSelectedTableId] = useState(null);
   const [filterStatus, setFilterStatus] = useState('ALL');
+  const [reservationBusyId, setReservationBusyId] = useState(null);
   const [viewMode, setViewMode] = useState('floor'); // 'floor' | 'grid'
   const [zoomLevel, setZoomLevel] = useState(1);
   const containerRef = useRef(null);
@@ -403,11 +430,13 @@ export const LiveTableFloorPlan = ({
       ALL: tables.length,
       AVAILABLE: 0,
       OCCUPIED: 0,
+      NEEDS_VERIFICATION: 0,
       PROCESSING: 0,
       READY: 0,
       SERVED: 0,
       BILL_REQUESTED: 0,
-      ATTENTION: 0
+      ATTENTION: 0,
+      RESERVED: 0
     };
     tables.forEach((t) => {
       if (counts[t.status] !== undefined) {
@@ -425,9 +454,26 @@ export const LiveTableFloorPlan = ({
     return layoutTables.filter((t) => t.status === filterStatus);
   }, [layoutTables, filterStatus]);
 
+  // Always resolve the drawer's table from the latest floorStatus so it updates live
+  const selectedTable = useMemo(
+    () => (selectedTableId ? layoutTables.find((t) => t.id === selectedTableId) || null : null),
+    [layoutTables, selectedTableId]
+  );
+  const setSelectedTable = (table) => setSelectedTableId(table ? table.id : null);
+
   const handleTableClick = (table) => {
     setSelectedTable(table);
     if (onSelectTable) onSelectTable(table);
+  };
+
+  const runReservationAction = async (fn, reservationId) => {
+    if (!fn) return;
+    setReservationBusyId(reservationId);
+    try {
+      await fn(reservationId);
+    } finally {
+      setReservationBusyId(null);
+    }
   };
 
   return (
@@ -597,16 +643,22 @@ export const LiveTableFloorPlan = ({
                     <stop offset="100%" stopColor="#1D4ED8" />
                   </radialGradient>
 
-                  <radialGradient id="grad-processing" cx="40%" cy="40%" r="65%">
-                    <stop offset="0%" stopColor="#F59E0B" />
-                    <stop offset="70%" stopColor="#D97706" />
-                    <stop offset="100%" stopColor="#B45309" />
-                  </radialGradient>
-
-                  <radialGradient id="grad-ready" cx="40%" cy="40%" r="65%">
+                  <radialGradient id="grad-verify" cx="40%" cy="40%" r="65%">
                     <stop offset="0%" stopColor="#A78BFA" />
                     <stop offset="70%" stopColor="#8B5CF6" />
                     <stop offset="100%" stopColor="#7C3AED" />
+                  </radialGradient>
+
+                  <radialGradient id="grad-processing" cx="40%" cy="40%" r="65%">
+                    <stop offset="0%" stopColor="#FB923C" />
+                    <stop offset="70%" stopColor="#F97316" />
+                    <stop offset="100%" stopColor="#EA580C" />
+                  </radialGradient>
+
+                  <radialGradient id="grad-ready" cx="40%" cy="40%" r="65%">
+                    <stop offset="0%" stopColor="#FDE047" />
+                    <stop offset="70%" stopColor="#EAB308" />
+                    <stop offset="100%" stopColor="#CA8A04" />
                   </radialGradient>
 
                   <radialGradient id="grad-served" cx="40%" cy="40%" r="65%">
@@ -616,15 +668,21 @@ export const LiveTableFloorPlan = ({
                   </radialGradient>
 
                   <radialGradient id="grad-bill" cx="40%" cy="40%" r="65%">
-                    <stop offset="0%" stopColor="#FDE047" />
-                    <stop offset="70%" stopColor="#EAB308" />
-                    <stop offset="100%" stopColor="#CA8A04" />
+                    <stop offset="0%" stopColor="#F472B6" />
+                    <stop offset="70%" stopColor="#EC4899" />
+                    <stop offset="100%" stopColor="#DB2777" />
                   </radialGradient>
 
                   <radialGradient id="grad-attention" cx="40%" cy="40%" r="65%">
                     <stop offset="0%" stopColor="#F87171" />
                     <stop offset="70%" stopColor="#EF4444" />
                     <stop offset="100%" stopColor="#DC2626" />
+                  </radialGradient>
+
+                  <radialGradient id="grad-reserved" cx="40%" cy="40%" r="65%">
+                    <stop offset="0%" stopColor="#94A3B8" />
+                    <stop offset="70%" stopColor="#64748B" />
+                    <stop offset="100%" stopColor="#475569" />
                   </radialGradient>
 
                   {/* Glow Filters */}
@@ -636,7 +694,15 @@ export const LiveTableFloorPlan = ({
                     </feMerge>
                   </filter>
 
-                  <filter id="glow-purple" x="-40%" y="-40%" width="180%" height="180%">
+                  <filter id="glow-ready" x="-40%" y="-40%" width="180%" height="180%">
+                    <feGaussianBlur in="SourceGraphic" stdDeviation="5" result="blur" />
+                    <feMerge>
+                      <feMergeNode in="blur" />
+                      <feMergeNode in="SourceGraphic" />
+                    </feMerge>
+                  </filter>
+
+                  <filter id="glow-verify" x="-40%" y="-40%" width="180%" height="180%">
                     <feGaussianBlur in="SourceGraphic" stdDeviation="5" result="blur" />
                     <feMerge>
                       <feMergeNode in="blur" />
@@ -726,7 +792,7 @@ export const LiveTableFloorPlan = ({
                     <span>{tbl.capacity} seats</span>
                     {tbl.currentOrder ? (
                       <span className="font-bold text-zinc-900 dark:text-zinc-200">
-                        ₹{Math.round(tbl.currentOrder.totalAmount / 100)}
+                        ₹{tbl.currentOrder.totalAmount}
                       </span>
                     ) : (
                       <span className="text-zinc-400">Available</span>
@@ -802,9 +868,17 @@ export const LiveTableFloorPlan = ({
               {onOpenPOS && (
                 <button
                   onClick={() => onOpenPOS(selectedTable.tableNumber)}
-                  className="px-4 py-2 bg-primary hover:bg-primary/90 text-white font-semibold rounded-xl text-xs transition-colors shadow-sm"
+                  className="px-4 py-2 bg-primary hover:bg-primary/90 text-primary-foreground font-semibold rounded-xl text-xs transition-colors shadow-sm"
                 >
                   {selectedTable.currentOrder ? 'Manage in POS' : 'Punch Order in POS'}
+                </button>
+              )}
+              {onReserveTable && (
+                <button
+                  onClick={() => onReserveTable(selectedTable)}
+                  className="px-4 py-2 bg-slate-600 hover:bg-slate-700 text-white font-semibold rounded-xl text-xs transition-colors shadow-sm inline-flex items-center gap-1.5"
+                >
+                  <BookmarkAdd01Icon size={14} /> Reserve this table
                 </button>
               )}
               <button
@@ -816,6 +890,82 @@ export const LiveTableFloorPlan = ({
               </button>
             </div>
           </div>
+
+          {/* Reservations: the one holding the table now, plus upcoming ones */}
+          {(selectedTable.reservation || selectedTable.upcomingReservations?.length > 0) && (
+            <div className="mt-4 pt-4 border-t border-zinc-200/60 dark:border-zinc-800 space-y-2">
+              {[
+                ...(selectedTable.reservation ? [{ ...selectedTable.reservation, _active: true }] : []),
+                ...(selectedTable.upcomingReservations || [])
+              ].map((r) => {
+                const busy = reservationBusyId === r.id;
+                return (
+                  <div
+                    key={r.id}
+                    className={`flex flex-col sm:flex-row sm:items-center gap-3 p-3 rounded-xl border text-xs ${
+                      r._active
+                        ? 'bg-slate-500/10 border-slate-500/30'
+                        : 'bg-white dark:bg-zinc-950 border-zinc-200 dark:border-zinc-800'
+                    }`}
+                  >
+                    <div className="p-2 rounded-lg bg-slate-500/15 text-slate-600 dark:text-slate-400 shrink-0">
+                      <Bookmark01Icon size={16} />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-bold text-zinc-900 dark:text-zinc-100">{r.guestName}</span>
+                        {r.partySize && (
+                          <span className="inline-flex items-center gap-1 text-zinc-500">
+                            <UserGroupIcon size={12} /> {r.partySize}
+                          </span>
+                        )}
+                        {r.guestPhone && (
+                          <span className="inline-flex items-center gap-1 text-zinc-500">
+                            <Call02Icon size={12} /> {r.guestPhone}
+                          </span>
+                        )}
+                        <span
+                          className={`px-2 py-0.5 rounded-full text-[10px] font-semibold border ${
+                            r.status === 'SEATED'
+                              ? 'bg-cyan-500/10 text-cyan-600 dark:text-cyan-400 border-cyan-500/30'
+                              : r._active
+                                ? 'bg-slate-500/10 text-slate-600 dark:text-slate-400 border-slate-500/30'
+                                : 'bg-zinc-500/10 text-zinc-600 dark:text-zinc-400 border-zinc-500/30'
+                          }`}
+                        >
+                          {r.status === 'SEATED' ? 'Seated' : r._active ? 'Holding table' : 'Upcoming'}
+                        </span>
+                      </div>
+                      <div className="text-zinc-500 mt-0.5">
+                        {formatDateTime(r.startsAt)} – {formatTime(r.endsAt)}
+                        {r.notes && <span className="ml-2 italic text-zinc-400">· {r.notes}</span>}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      {onSeatReservation && r.status === 'CONFIRMED' && (
+                        <button
+                          disabled={busy}
+                          onClick={() => runReservationAction(onSeatReservation, r.id)}
+                          className="px-3 py-1.5 bg-cyan-600 hover:bg-cyan-700 disabled:opacity-50 text-white font-semibold rounded-lg text-xs transition-colors"
+                        >
+                          Seat guest
+                        </button>
+                      )}
+                      {onCancelReservation && (
+                        <button
+                          disabled={busy}
+                          onClick={() => runReservationAction(onCancelReservation, r.id)}
+                          className="px-3 py-1.5 border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-50 text-zinc-700 dark:text-zinc-300 font-semibold rounded-lg text-xs transition-colors"
+                        >
+                          Cancel
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
 
           {/* Active Order Breakdown */}
           {selectedTable.currentOrder && (
@@ -836,7 +986,7 @@ export const LiveTableFloorPlan = ({
                 <div>
                   <span className="text-zinc-500 text-[11px] block">Total Amount</span>
                   <span className="text-xl font-bold text-zinc-900 dark:text-zinc-50">
-                    ₹{Math.round(selectedTable.currentOrder.totalAmount / 100)}
+                    ₹{selectedTable.currentOrder.totalAmount}
                   </span>
                 </div>
                 <div className="text-[11px] text-zinc-400 mt-2">

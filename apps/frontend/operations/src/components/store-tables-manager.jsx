@@ -3,15 +3,23 @@ import api from '../lib/api';
 import { QRCodeSVG } from 'qrcode.react';
 import { jsPDF } from 'jspdf';
 import { Card, CardContent, Button, Input, Skeleton } from '@smo/ui';
-import { QrCodeIcon, Download01Icon, PlusSignIcon, Delete02Icon, AlertCircleIcon, DocumentCodeIcon, Loading03Icon } from 'hugeicons-react';
+import { QrCodeIcon, Download01Icon, PlusSignIcon, Delete02Icon, AlertCircleIcon, DocumentCodeIcon, Loading03Icon, PencilEdit02Icon, UserGroupIcon, Tick02Icon, Cancel01Icon } from 'hugeicons-react';
+
+const DEFAULT_CAPACITY = 4;
 
 export const StoreTablesManager = ({ storeId, storeSlug, brandSlug }) => {
   const [tables, setTables] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [newTableNumber, setNewTableNumber] = useState('');
+  const [newCapacity, setNewCapacity] = useState(String(DEFAULT_CAPACITY));
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isGeneratingPDF, setIsGeneratingPDF] = useState(false);
+
+  // Inline capacity editing on a QR card
+  const [editingTableId, setEditingTableId] = useState(null);
+  const [editCapacity, setEditCapacity] = useState('');
+  const [isSavingCapacity, setIsSavingCapacity] = useState(false);
 
   const fetchTables = async () => {
     setLoading(true);
@@ -34,18 +42,55 @@ export const StoreTablesManager = ({ storeId, storeSlug, brandSlug }) => {
 
   const handleAddTable = async (e) => {
     e.preventDefault();
-    if (!newTableNumber) return;
+    if (!newTableNumber || !newCapacity) return;
     setIsSubmitting(true);
     setError('');
 
     try {
-      await api.post(`/stores/${storeId}/tables`, { tableNumber: parseInt(newTableNumber) });
+      await api.post(`/stores/${storeId}/tables`, {
+        tableNumber: parseInt(newTableNumber, 10),
+        capacity: parseInt(newCapacity, 10)
+      });
       setNewTableNumber('');
+      setNewCapacity(String(DEFAULT_CAPACITY));
       fetchTables();
     } catch (err) {
       setError(err.response?.data?.error?.message || 'Failed to add table');
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  const startEditCapacity = (table) => {
+    setEditingTableId(table.id);
+    setEditCapacity(String(table.capacity ?? DEFAULT_CAPACITY));
+    setError('');
+  };
+
+  const cancelEditCapacity = () => {
+    setEditingTableId(null);
+    setEditCapacity('');
+  };
+
+  const saveCapacity = async (tableId) => {
+    const capacity = parseInt(editCapacity, 10);
+    if (!Number.isInteger(capacity) || capacity < 1) {
+      setError('Capacity must be at least 1');
+      return;
+    }
+    setIsSavingCapacity(true);
+    setError('');
+    try {
+      const res = await api.patch(`/stores/${storeId}/tables/${tableId}`, { capacity });
+      if (res.data.success) {
+        // Patch locally so the card updates without a refetch flash
+        setTables(prev => prev.map(t => (t.id === tableId ? { ...t, capacity: res.data.data.capacity } : t)));
+        cancelEditCapacity();
+      }
+    } catch (err) {
+      setError(err.response?.data?.error?.message || 'Failed to update capacity');
+    } finally {
+      setIsSavingCapacity(false);
     }
   };
 
@@ -60,7 +105,9 @@ export const StoreTablesManager = ({ storeId, storeSlug, brandSlug }) => {
   };
 
   const getQRUrl = (tableNumber) => {
-    const domain = window.location.hostname === 'localhost' ? 'http://localhost:5173' : 'https://menu.scanmyorder.com';
+    // Customer menu app (apps/frontend/menu) runs on 5175 locally. Override via VITE_MENU_APP_URL.
+    const domain = import.meta.env.VITE_MENU_APP_URL
+      || (window.location.hostname === 'localhost' ? 'http://localhost:5175' : 'https://menu.scanmyorder.com');
     return `${domain}/${brandSlug}/${storeSlug}?table=${tableNumber}`;
   };
 
@@ -201,17 +248,33 @@ export const StoreTablesManager = ({ storeId, storeSlug, brandSlug }) => {
               )}
             </Button>
           )}
-          <form onSubmit={handleAddTable} className="flex items-center gap-2">
+          <form onSubmit={handleAddTable} className="flex items-center">
             <Input
               type="number"
               min="1"
               placeholder="Table No."
               value={newTableNumber}
               onChange={(e) => setNewTableNumber(e.target.value)}
-              className="w-24 rounded-l-3xl rounded-r-none h-9"
+              className="w-24 rounded-l-3xl rounded-r-none h-9 border-r-0"
+              aria-label="Table number"
               required
             />
-            <Button type="submit" disabled={isSubmitting} className="rounded-l-none">
+            <div className="relative">
+              <UserGroupIcon size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-400 pointer-events-none" />
+              <Input
+                type="number"
+                min="1"
+                max="50"
+                placeholder="Seats"
+                value={newCapacity}
+                onChange={(e) => setNewCapacity(e.target.value)}
+                className="w-24 rounded-none h-9 pl-8"
+                aria-label="Seating capacity"
+                title="Seating capacity"
+                required
+              />
+            </div>
+            <Button type="submit" disabled={isSubmitting || !newTableNumber || !newCapacity} className="rounded-l-none h-9">
               <PlusSignIcon size={16} /> Add
             </Button>
           </form>
@@ -240,14 +303,79 @@ export const StoreTablesManager = ({ storeId, storeSlug, brandSlug }) => {
           {tables.map(table => (
             <Card key={table.id} className="border-zinc-200 dark:border-zinc-800 text-center flex flex-col group">
               <CardContent className="p-6 flex-1 flex flex-col items-center justify-between gap-4">
-                <div className="w-full flex justify-between items-center">
-                  <h4 className="font-bold text-lg text-zinc-900 dark:text-zinc-100">Table {table.tableNumber}</h4>
-                  <button
-                    onClick={() => handleDelete(table.id)}
-                    className="text-zinc-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"
-                  >
-                    <Delete02Icon size={18} />
-                  </button>
+                <div className="w-full flex justify-between items-start gap-2">
+                  <div className="text-left min-w-0">
+                    <h4 className="font-bold text-lg text-zinc-900 dark:text-zinc-100 leading-tight">Table {table.tableNumber}</h4>
+
+                    {editingTableId === table.id ? (
+                      /* Inline capacity editor */
+                      <form
+                        onSubmit={(e) => { e.preventDefault(); saveCapacity(table.id); }}
+                        className="mt-1 flex items-center gap-1"
+                      >
+                        <UserGroupIcon size={14} className="text-zinc-400 shrink-0" />
+                        <Input
+                          type="number"
+                          min="1"
+                          max="50"
+                          value={editCapacity}
+                          onChange={(e) => setEditCapacity(e.target.value)}
+                          onKeyDown={(e) => { if (e.key === 'Escape') cancelEditCapacity(); }}
+                          className="w-16 h-7 text-xs px-2"
+                          autoFocus
+                          disabled={isSavingCapacity}
+                          aria-label="Seating capacity"
+                        />
+                        <button
+                          type="submit"
+                          disabled={isSavingCapacity}
+                          className="p-1 rounded text-emerald-600 hover:bg-emerald-500/10 disabled:opacity-50"
+                          title="Save"
+                        >
+                          {isSavingCapacity ? <Loading03Icon size={14} className="animate-spin" /> : <Tick02Icon size={14} />}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={cancelEditCapacity}
+                          disabled={isSavingCapacity}
+                          className="p-1 rounded text-zinc-400 hover:bg-zinc-500/10 disabled:opacity-50"
+                          title="Cancel"
+                        >
+                          <Cancel01Icon size={14} />
+                        </button>
+                      </form>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => startEditCapacity(table)}
+                        className="mt-0.5 inline-flex items-center gap-1 text-xs text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors"
+                        title="Edit seating capacity"
+                      >
+                        <UserGroupIcon size={13} />
+                        <span>{table.capacity ?? DEFAULT_CAPACITY} {(table.capacity ?? DEFAULT_CAPACITY) === 1 ? 'seat' : 'seats'}</span>
+                        <PencilEdit02Icon size={12} className="opacity-0 group-hover:opacity-100 transition-opacity" />
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                    {editingTableId !== table.id && (
+                      <button
+                        onClick={() => startEditCapacity(table)}
+                        className="p-1 rounded text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100"
+                        title="Edit capacity"
+                      >
+                        <PencilEdit02Icon size={16} />
+                      </button>
+                    )}
+                    <button
+                      onClick={() => handleDelete(table.id)}
+                      className="p-1 rounded text-zinc-400 hover:text-red-500"
+                      title="Delete table"
+                    >
+                      <Delete02Icon size={16} />
+                    </button>
+                  </div>
                 </div>
 
                 <div className="bg-white p-3 rounded-xl shadow-sm border border-zinc-100 mx-auto relative">

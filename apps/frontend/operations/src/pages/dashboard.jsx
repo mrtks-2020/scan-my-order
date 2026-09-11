@@ -2,6 +2,7 @@ import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../store/authStore';
 import api from '../lib/api';
+import { ReserveTableDialog } from '../components/reserve-table-dialog';
 import {
   FloorMap,
   LiveTableFloorPlan,
@@ -19,7 +20,8 @@ import {
   AlertCircleIcon,
   Layers01Icon,
   DashboardSquare01Icon,
-  Tick02Icon
+  Tick02Icon,
+  Bookmark01Icon
 } from 'hugeicons-react';
 
 export const Dashboard = () => {
@@ -32,6 +34,10 @@ export const Dashboard = () => {
   const [loading, setLoading] = useState(true);
   const [connectionStatus, setConnectionStatus] = useState('connecting');
   const [activeFloorView, setActiveFloorView] = useState('live_floor'); // 'live_floor' | 'pipeline'
+  const [reserveTarget, setReserveTarget] = useState(null); // table being reserved (dialog open when set)
+
+  // Reservations are manager/admin only (mirrors the backend route guard)
+  const canReserve = ['SUPER_ADMIN', 'TENANT_ADMIN', 'STORE_MANAGER'].includes(user?.role);
 
   // Fetch available stores if multi-store user
   useEffect(() => {
@@ -53,7 +59,12 @@ export const Dashboard = () => {
     if (!silent) setLoading(true);
 
     try {
-      const res = await api.get(`/stores/${storeIdToFetch}/floor-status`);
+      // Local-day boundaries so "today's reservations" matches the staff's clock, not the server's
+      const dayStart = new Date(); dayStart.setHours(0, 0, 0, 0);
+      const dayEnd = new Date(dayStart); dayEnd.setDate(dayEnd.getDate() + 1);
+      const res = await api.get(`/stores/${storeIdToFetch}/floor-status`, {
+        params: { dayStart: dayStart.toISOString(), dayEnd: dayEnd.toISOString() }
+      });
       if (res.data.success) {
         setFloorStatus(res.data.data);
       }
@@ -103,7 +114,8 @@ export const Dashboard = () => {
             'ORDER_CANCELLED',
             'WAITER_CALL_CREATED',
             'WAITER_CALL_ACKNOWLEDGED',
-            'WAITER_CALL_RESOLVED'
+            'WAITER_CALL_RESOLVED',
+            'RESERVATION_UPDATED'
           ];
 
           if (relevantEvents.includes(data.type)) {
@@ -143,6 +155,22 @@ export const Dashboard = () => {
     navigate(`/dashboard/pos?table=${tableNumber}`);
   };
 
+  // Reservation actions from the floor plan drawer
+  const updateReservation = async (reservationId, status) => {
+    if (!selectedStoreId || !reservationId) return;
+    try {
+      await api.patch(`/stores/${selectedStoreId}/reservations/${reservationId}`, { status });
+      fetchFloorStatus(selectedStoreId, true);
+    } catch (err) {
+      console.error(`Failed to mark reservation ${status}:`, err);
+    }
+  };
+  const handleSeatReservation = (id) => updateReservation(id, 'SEATED');
+  const handleCancelReservation = (id) => {
+    if (!window.confirm('Cancel this reservation?')) return Promise.resolve();
+    return updateReservation(id, 'CANCELLED');
+  };
+
   // Derived metrics
   const tables = floorStatus?.tables || [];
   const totalTables = tables.length;
@@ -151,6 +179,7 @@ export const Dashboard = () => {
   const kitchenOrders = floorStatus?.orders?.filter((o) => o.status === 'PROCESSING').length || 0;
   const readyOrders = floorStatus?.orders?.filter((o) => o.status === 'READY').length || 0;
   const waiterCallsCount = floorStatus?.waiterCalls || 0;
+  const reservationsToday = floorStatus?.reservationsToday || { total: 0, upcoming: 0, seated: 0, guests: 0 };
 
   return (
     <div className="space-y-6 pb-12">
@@ -202,7 +231,7 @@ export const Dashboard = () => {
       </div>
 
       {/* Real-Time Operational KPI Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
         {/* Metric 1: Table Occupancy */}
         <div className="p-5 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl shadow-sm flex flex-col justify-between">
           <div className="flex items-center justify-between text-zinc-500 dark:text-zinc-400">
@@ -231,7 +260,7 @@ export const Dashboard = () => {
         <div className="p-5 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl shadow-sm flex flex-col justify-between">
           <div className="flex items-center justify-between text-zinc-500 dark:text-zinc-400">
             <span className="text-xs font-semibold uppercase tracking-wider">In Kitchen (KDS)</span>
-            <div className="p-1.5 rounded-lg bg-amber-500/10 text-amber-500">
+            <div className="p-1.5 rounded-lg bg-orange-500/10 text-orange-500">
               <Clock01Icon size={16} />
             </div>
           </div>
@@ -245,12 +274,12 @@ export const Dashboard = () => {
         <div className="p-5 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl shadow-sm flex flex-col justify-between">
           <div className="flex items-center justify-between text-zinc-500 dark:text-zinc-400">
             <span className="text-xs font-semibold uppercase tracking-wider">Ready on Pass</span>
-            <div className="p-1.5 rounded-lg bg-purple-500/10 text-purple-500">
+            <div className="p-1.5 rounded-lg bg-yellow-500/10 text-yellow-500">
               <CheckmarkBadge01Icon size={16} />
             </div>
           </div>
           <div className="mt-2">
-            <div className="text-3xl font-black text-purple-600 dark:text-purple-400">{readyOrders}</div>
+            <div className="text-3xl font-black text-yellow-600 dark:text-yellow-400">{readyOrders}</div>
             <p className="text-xs text-zinc-400 mt-1">Hot dishes awaiting table pickup</p>
           </div>
         </div>
@@ -269,6 +298,24 @@ export const Dashboard = () => {
             </div>
             <p className="text-xs text-zinc-400 mt-1">
               {waiterCallsCount > 0 ? 'Active customer call alerts!' : 'All customer requests resolved'}
+            </p>
+          </div>
+        </div>
+
+        {/* Metric 5: Today's Reservations */}
+        <div className="p-5 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl shadow-sm flex flex-col justify-between">
+          <div className="flex items-center justify-between text-zinc-500 dark:text-zinc-400">
+            <span className="text-xs font-semibold uppercase tracking-wider">Today's Reservations</span>
+            <div className="p-1.5 rounded-lg bg-slate-500/10 text-slate-500">
+              <Bookmark01Icon size={16} />
+            </div>
+          </div>
+          <div className="mt-2">
+            <div className="text-3xl font-black text-zinc-900 dark:text-zinc-50">{reservationsToday.total}</div>
+            <p className="text-xs text-zinc-400 mt-1">
+              {reservationsToday.total === 0
+                ? 'No bookings for today'
+                : `${reservationsToday.upcoming} upcoming · ${reservationsToday.seated} seated${reservationsToday.guests ? ` · ${reservationsToday.guests} guests` : ''}`}
             </p>
           </div>
         </div>
@@ -318,12 +365,23 @@ export const Dashboard = () => {
           floorStatus={floorStatus}
           onResolveWaiterCall={handleResolveWaiterCall}
           onOpenPOS={handleOpenPOS}
+          onReserveTable={canReserve ? (table) => setReserveTarget(table) : undefined}
+          onSeatReservation={canReserve ? handleSeatReservation : undefined}
+          onCancelReservation={canReserve ? handleCancelReservation : undefined}
         />
       ) : (
         <div className="bg-white dark:bg-zinc-900 rounded-2xl border border-zinc-200 dark:border-zinc-800 p-4 shadow-sm">
           <FloorMap floorStatus={floorStatus} />
         </div>
       )}
+
+      <ReserveTableDialog
+        open={!!reserveTarget}
+        onOpenChange={(open) => { if (!open) setReserveTarget(null); }}
+        storeId={selectedStoreId}
+        table={reserveTarget}
+        onReserved={() => fetchFloorStatus(selectedStoreId, true)}
+      />
     </div>
   );
 };

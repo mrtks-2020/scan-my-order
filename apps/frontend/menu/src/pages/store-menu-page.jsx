@@ -8,6 +8,7 @@ import { GoogleLogin } from '@react-oauth/google';
 import { Skeleton, Button, Input, AnimatedThemeToggler } from '@smo/ui';
 import { UserProfile } from '../components/user-profile';
 import { LiveOrders } from '../components/live-orders';
+import { CallWaiter } from '../components/call-waiter';
 import {
   ShoppingCart01Icon,
   PlusSignIcon,
@@ -77,6 +78,8 @@ export const StoreMenuPage = () => {
   const { token, setAuth } = useAuthStore();
 
   const categoryRefs = useRef({});
+  // Sticky header (store info + search + category nav); its height is the scroll offset when jumping to a category
+  const stickyHeaderRef = useRef(null);
 
   const showToast = (message, type = 'info') => {
     setToast({ message, type });
@@ -131,34 +134,12 @@ export const StoreMenuPage = () => {
     fetchMenuData();
   }, [brandSlug, storeSlug]);
 
-  // ScrollSpy with IntersectionObserver
-  useEffect(() => {
-    if (loading || categories.length === 0) return;
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        const visible = entries.find((entry) => entry.isIntersecting);
-        if (visible) {
-          const catId = visible.target.getAttribute('data-category-id');
-          if (catId) setActiveCategory(catId);
-        }
-      },
-      { rootMargin: '-20% 0px -70% 0px' }
-    );
-
-    Object.values(categoryRefs.current).forEach((el) => {
-      if (el) observer.observe(el);
-    });
-
-    return () => observer.disconnect();
-  }, [loading, categories]);
-
   const scrollToCategory = (id) => {
     setActiveCategory(id);
     const target = categoryRefs.current[id];
     if (target) {
-      const yOffset = -130; // Accounts for sticky nav and header offset
-      const y = target.getBoundingClientRect().top + window.pageYOffset + yOffset;
+      const headerHeight = stickyHeaderRef.current?.offsetHeight || 0;
+      const y = target.getBoundingClientRect().top + window.pageYOffset - headerHeight - 8;
       window.scrollTo({ top: y, behavior: 'smooth' });
     }
   };
@@ -175,6 +156,43 @@ export const StoreMenuPage = () => {
       }))
       .filter((cat) => cat.items.length > 0);
   }, [categories, searchQuery]);
+
+  // ScrollSpy: the active category is the last section whose top has scrolled past the sticky header
+  useEffect(() => {
+    if (loading || filteredCategories.length === 0) return;
+
+    let frame = null;
+    const update = () => {
+      frame = null;
+      const headerHeight = stickyHeaderRef.current?.offsetHeight || 0;
+      const line = headerHeight + 16;
+      const atBottom = window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 2;
+
+      let current = filteredCategories[0].id;
+      if (atBottom) {
+        current = filteredCategories[filteredCategories.length - 1].id;
+      } else {
+        for (const cat of filteredCategories) {
+          const el = categoryRefs.current[cat.id];
+          if (el && el.getBoundingClientRect().top <= line) current = cat.id;
+        }
+      }
+      setActiveCategory((prev) => (prev === current ? prev : current));
+    };
+
+    const onScroll = () => {
+      if (frame === null) frame = requestAnimationFrame(update);
+    };
+
+    update();
+    window.addEventListener('scroll', onScroll, { passive: true });
+    window.addEventListener('resize', onScroll);
+    return () => {
+      window.removeEventListener('scroll', onScroll);
+      window.removeEventListener('resize', onScroll);
+      if (frame !== null) cancelAnimationFrame(frame);
+    };
+  }, [loading, filteredCategories]);
 
   const submitOrder = async (overridePin) => {
     setIsPlacingOrder(true);
@@ -317,6 +335,11 @@ export const StoreMenuPage = () => {
 
   const brandColorHex = store?.tenant?.brandColor || '#059669';
 
+  // DB id of the scanned table (waiter calls are keyed by tableId, not tableNumber)
+  const scannedTableId = tableNumber
+    ? store?.tables?.find((t) => t.tableNumber === parseInt(tableNumber, 10))?.id
+    : undefined;
+
   // Math for Bill
   const subTotal = getTotalPrice();
   let discountAmount = 0;
@@ -344,27 +367,25 @@ export const StoreMenuPage = () => {
       <div className="relative mx-auto flex min-h-screen w-full max-w-md flex-col border-x">
         <FullWidthDivider contained={true} className="-top-px" />
 
-        <div className="relative w-full overflow-hidden border-b bg-zinc-950">
-          <Skeleton className="aspect-[16/9] w-full rounded-none" />
-          <div className="relative -mt-12 flex items-end justify-between gap-3 px-4 pb-4">
-            <div className="flex min-w-0 items-center gap-3">
-              <Skeleton className="h-16 w-16 shrink-0 rounded-2xl border-2 border-white/20" />
-              <div className="min-w-0 space-y-2 pb-1">
-                <Skeleton className="h-5 w-32 rounded bg-zinc-800" />
-                <Skeleton className="h-3 w-24 rounded bg-zinc-800" />
-              </div>
-            </div>
-            <Skeleton className="h-8 w-24 shrink-0 rounded-full bg-zinc-800" />
-          </div>
-          <div className="px-4 py-3">
-            <Skeleton className="h-11 w-full rounded-xl bg-zinc-800" />
-          </div>
-        </div>
+        <Skeleton className="aspect-[16/9] w-full rounded-none" />
 
-        <FullWidthDivider contained={true} className="-bottom-px" />
-
-        <div className="relative mx-auto flex w-full flex-col">
+        <div className="sticky top-0 z-20 mx-auto flex w-full flex-col">
           <FullWidthDivider contained={true} className="-top-px" />
+          <div className="border-b border-zinc-200/80 bg-white dark:border-zinc-800/80 dark:bg-zinc-950">
+            <div className="flex items-end justify-between gap-3 px-4 pb-4 pt-4">
+              <div className="flex min-w-0 items-center gap-3">
+                <Skeleton className="h-16 w-16 shrink-0 rounded-2xl" />
+                <div className="min-w-0 space-y-2 pb-1">
+                  <Skeleton className="h-5 w-32 rounded" />
+                  <Skeleton className="h-3 w-24 rounded" />
+                </div>
+              </div>
+              <Skeleton className="h-8 w-24 shrink-0 rounded-full" />
+            </div>
+            <div className="px-4 py-3">
+              <Skeleton className="h-11 w-full rounded-xl" />
+            </div>
+          </div>
           <div className="flex gap-2 overflow-x-auto border-b border-zinc-200/80 bg-zinc-50/90 px-4 py-2.5 no-scrollbar backdrop-blur-md dark:border-zinc-800/80 dark:bg-zinc-950/90">
             {[1, 2, 3, 4].map((i) => (
               <Skeleton key={i} className="h-9 w-24 shrink-0 rounded-full" />
@@ -433,19 +454,27 @@ export const StoreMenuPage = () => {
   return (
     <>
       <div className="relative mx-auto flex w-full max-w-md flex-col border-x">
+        {/* Banner scrolls with the page; everything below it in the header is sticky */}
         <div className="relative mx-auto flex w-full flex-col">
           <FullWidthDivider contained={true} className="-top-px" />
-          <header className="relative w-full overflow-hidden border-b border-zinc-200/80 bg-white dark:border-zinc-800/80 dark:bg-zinc-950">
-            <div className="relative w-full overflow-hidden">
-              <img
-                src={store.banner || 'https://images.unsplash.com/photo-1555396273-367ea4eb4db5?auto=format&fit=crop&w=800&q=80'}
-                alt={store.tenant?.name || 'Store banner'}
-                className="h-auto w-full object-cover"
-              />
-              <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-white via-transparent to-transparent dark:from-zinc-950/80" />
+          <div className="relative w-full overflow-hidden bg-white dark:bg-zinc-950">
+            <img
+              src={store.banner || 'https://images.unsplash.com/photo-1555396273-367ea4eb4db5?auto=format&fit=crop&w=800&q=80'}
+              alt={store.tenant?.name || 'Store banner'}
+              className="h-auto w-full object-cover"
+            />
+            <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-white via-transparent to-transparent dark:from-zinc-950/80" />
+            <div className="absolute bottom-3 right-3 flex items-center gap-2">
+              <AnimatedThemeToggler />
+              <UserProfile />
             </div>
+          </div>
+        </div>
 
-            <div className="relative mt-4 flex items-end justify-between gap-3 px-4 pb-4">
+        <div ref={stickyHeaderRef} className="sticky top-0 z-20 mx-auto flex w-full flex-col">
+          <FullWidthDivider contained={true} className="-top-px" />
+          <header className="relative w-full border-b border-zinc-200/80 bg-white dark:border-zinc-800/80 dark:bg-zinc-950">
+            <div className="relative flex items-end justify-between gap-3 px-4 pb-4 pt-4">
               <div className="flex min-w-0 items-center gap-3">
                 {store.tenant?.logo ? (
                   <img
@@ -467,27 +496,32 @@ export const StoreMenuPage = () => {
               </div>
 
               {tableNumber ? (
-                <div className="flex items-center gap-2 shrink-0">
-                  <div className="flex items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-700 shadow-sm backdrop-blur-md dark:border-emerald-400/30 dark:bg-emerald-500/20 dark:text-emerald-300">
-                    <span className="h-2 w-2 animate-pulse rounded-full bg-emerald-500 dark:bg-emerald-400" />
-                    Table {tableNumber}
-                  </div>
-                  {activeTablePin && (
-                    <div className="flex items-center gap-1 rounded-full border border-indigo-500/30 bg-indigo-50 px-2.5 py-1 text-xs font-semibold text-indigo-700 backdrop-blur-md dark:border-indigo-400/30 dark:bg-indigo-500/20 dark:text-indigo-300" title="Table Session PIN">
-                      PIN: {activeTablePin}
+                <div className="flex shrink-0 items-stretch gap-2 self-stretch">
+                  {/* Table + PIN stacked and left-aligned; the Call Waiter button fills the row height beside them */}
+                  <div className="flex flex-col items-start justify-center gap-1.5">
+                    <div className="flex items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-700 shadow-sm backdrop-blur-md dark:border-emerald-400/30 dark:bg-emerald-500/20 dark:text-emerald-300">
+                      <span className="h-2 w-2 animate-pulse rounded-full bg-emerald-500 dark:bg-emerald-400" />
+                      Table {tableNumber}
                     </div>
-                  )}
+                    {activeTablePin && (
+                      <div className="flex items-center gap-1 rounded-full border border-indigo-500/30 bg-indigo-50 px-2.5 py-1 text-xs font-semibold text-indigo-700 backdrop-blur-md dark:border-indigo-400/30 dark:bg-indigo-500/20 dark:text-indigo-300" title="Table Session PIN">
+                        PIN: {activeTablePin}
+                      </div>
+                    )}
+                  </div>
+                  <CallWaiter
+                    storeId={store.id}
+                    tableId={scannedTableId}
+                    tableNumber={tableNumber}
+                    brandColor={brandColorHex}
+                    onToast={showToast}
+                  />
                 </div>
               ) : (
                 <div className="shrink-0 rounded-full border border-amber-500/30 bg-amber-50 px-2.5 py-1.5 text-[11px] font-medium text-amber-700 backdrop-blur-md dark:border-amber-400/30 dark:bg-amber-500/20 dark:text-amber-300">
                   Browsing Menu
                 </div>
               )}
-
-              <div className="absolute -top-8 right-3 flex items-center gap-2">
-                <AnimatedThemeToggler />
-                <UserProfile />
-              </div>
             </div>
 
             <div className="px-4 py-3">
@@ -510,12 +544,7 @@ export const StoreMenuPage = () => {
               </div>
             </div>
           </header>
-          <FullWidthDivider contained={true} className="-bottom-px" />
-        </div>
-
-        <div className="relative mx-auto flex w-full flex-col">
-          <FullWidthDivider contained={true} className="-top-px" />
-          <nav className="sticky top-0 z-20 flex gap-2 overflow-x-auto border-b border-zinc-200/80 bg-zinc-50/90 px-4 py-2.5 no-scrollbar shadow-xs backdrop-blur-md dark:border-zinc-800/80 dark:bg-zinc-950/90">
+          <nav className="flex gap-2 overflow-x-auto border-b border-zinc-200/80 bg-zinc-50/90 px-4 py-2.5 no-scrollbar shadow-xs backdrop-blur-md dark:border-zinc-800/80 dark:bg-zinc-950/90">
             {categories.map((cat) => {
               const isActive = activeCategory === cat.id;
               return (
@@ -538,7 +567,21 @@ export const StoreMenuPage = () => {
 
         <div className="relative mx-auto flex w-full flex-col">
           <FullWidthDivider contained={true} className="-top-px" />
-          <main className="mt-2 space-y-8">
+
+          {/* Active Session PIN Banner */}
+          {sessionPinBanner && (
+            <div className="mx-4 mt-3 flex items-center justify-between rounded-xl border border-indigo-200 bg-indigo-50/90 p-3 text-xs text-indigo-950 shadow-xs dark:border-indigo-900/50 dark:bg-indigo-950/40 dark:text-indigo-200">
+              <div>
+                <p className="font-bold">Table {tableNumber} Dining PIN: {sessionPinBanner}</p>
+                <p className="text-[11px] opacity-80">Share this 4-digit PIN with anyone at your table to add more dishes.</p>
+              </div>
+              <button onClick={() => setSessionPinBanner('')} className="p-1 text-indigo-500 hover:text-indigo-700">
+                <Cancel01Icon size={16} />
+              </button>
+            </div>
+          )}
+
+          <main className="mt-2 space-y-8 pb-28">
             {filteredCategories.length === 0 ? (
               <div className="space-y-2 py-12 text-center text-zinc-500">
                 <p className="text-base font-medium">No dishes match "{searchQuery}"</p>
@@ -550,7 +593,6 @@ export const StoreMenuPage = () => {
                   key={cat.id}
                   ref={(el) => (categoryRefs.current[cat.id] = el)}
                   data-category-id={cat.id}
-                  className="scroll-mt-28"
                 >
                   <h2 className="flex items-center gap-2 px-4 py-3 text-lg font-bold text-zinc-900 dark:text-zinc-100">
                     {cat.name}
@@ -858,19 +900,6 @@ export const StoreMenuPage = () => {
                 Cancel
               </button>
             </div>
-          </div>
-        )}
-        
-        {/* Active Session PIN Banner */}
-        {sessionPinBanner && (
-          <div className="mx-4 mt-3 flex items-center justify-between rounded-xl border border-indigo-200 bg-indigo-50/90 p-3 text-xs text-indigo-950 shadow-xs dark:border-indigo-900/50 dark:bg-indigo-950/40 dark:text-indigo-200">
-            <div>
-              <p className="font-bold">Table {tableNumber} Dining PIN: {sessionPinBanner}</p>
-              <p className="text-[11px] opacity-80">Share this 4-digit PIN with anyone at your table to add more dishes.</p>
-            </div>
-            <button onClick={() => setSessionPinBanner('')} className="p-1 text-indigo-500 hover:text-indigo-700">
-              <Cancel01Icon size={16} />
-            </button>
           </div>
         )}
 

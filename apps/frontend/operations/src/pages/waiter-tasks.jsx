@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import api from '../lib/api';
 import { useAuthStore } from '../store/authStore';
 import { Card, CardContent, Button, Select, SelectTrigger, SelectValue, SelectContent, SelectItem, Skeleton } from '@smo/ui';
@@ -645,7 +645,7 @@ export const WaiterTasks = () => {
               : 'text-zinc-500 hover:text-zinc-700'
           }`}
         >
-          Collect <span className="bg-blue-100 dark:bg-blue-900/30 text-blue-700 px-1.5 py-0.5 rounded-full text-xs ml-1">{servedOrders.length}</span>
+          Collect <span className="bg-blue-100 dark:bg-blue-900/30 text-blue-700 px-1.5 py-0.5 rounded-full text-xs ml-1">{servedGroups.length}</span>
         </button>
       </div>
 

@@ -34,10 +34,11 @@ export const StoreMenuBuilder = ({ storeId }) => {
       setLoading(true);
       const res = await api.get(`/stores/${storeId}/menu`);
       if (res.data.success) {
-        setCategories(res.data.data.categories || []);
+        // Endpoint returns the categories array directly (each with nested items)
+        const cats = Array.isArray(res.data.data) ? res.data.data : [];
+        setCategories(cats);
         // Flat list of all items for preview
-        const items = res.data.data.categories.flatMap(c => c.items || []);
-        setMenuItems(items);
+        setMenuItems(cats.flatMap(c => c.items || []));
       }
     } catch (err) {
       setError('Failed to fetch menu');
@@ -115,7 +116,7 @@ export const StoreMenuBuilder = ({ storeId }) => {
         categoryId: selectedCategoryId,
         name: selectedItem.name,
         description: selectedItem.description,
-        price: parseInt(parseFloat(price) * 100), // convert to cents
+        price: Math.round(parseFloat(price)), // whole rupees, same unit as the rest of the app
         image: selectedItem.image,
         dietary: selectedItem.dietary,
         spiceLevel: 'NONE'
@@ -193,7 +194,7 @@ export const StoreMenuBuilder = ({ storeId }) => {
                         )}
                         <div className="flex-1 overflow-hidden">
                           <p className="text-sm font-semibold truncate text-zinc-900 dark:text-zinc-100">{item.name}</p>
-                          <p className="text-xs text-zinc-500">{(item.price / 100).toFixed(2)}</p>
+                          <p className="text-xs text-zinc-500">₹{item.price}</p>
                         </div>
                       </div>
                     ))}
@@ -275,12 +276,12 @@ export const StoreMenuBuilder = ({ storeId }) => {
             </div>
 
             <div className="space-y-2">
-              <Label>Price</Label>
-              <Input 
-                type="number" 
-                step="0.01"
+              <Label>Price (₹)</Label>
+              <Input
+                type="number"
+                step="1"
                 min="0"
-                placeholder="0.00"
+                placeholder="e.g. 250"
                 value={price}
                 onChange={e => setPrice(e.target.value)}
               />

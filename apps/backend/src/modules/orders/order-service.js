@@ -7,6 +7,10 @@ const { decrypt } = require("../../lib/encryption");
 const { broadcastToStore, broadcastToCustomer } = require("./sse-service");
 const { evaluateMenuItemAvailability } = require("../inventory/inventory-service");
 
+// Orders in these states have not been paid for and were never sent to the kitchen.
+// They are excluded from table bills and cancelled (not settled) when a session closes.
+const UNPAID_STATUSES = ['PENDING_PAYMENT', 'DRAFT'];
+
 // Helper to deduce price from menu and calculate totals
 async function buildCartItems(prisma, storeId, itemsInput) {
   let totalAmount = 0;
@@ -459,6 +463,9 @@ async function handleRazorpayWebhook(tenantId, payload, signature, rawBody) {
     if (order) {
       if (order.status === 'PENDING_PAYMENT') {
         await updateOrderStatus(null, order.storeId, order.id, 'PROCESSING', true);
+      } else if (order.status === 'CANCELLED') {
+        // Payment arrived after the order was expired/cancelled. Money was taken; needs a manual refund.
+        console.error(`[Webhook] PAYMENT RECEIVED FOR CANCELLED ORDER ${order.id} (store ${order.storeId}). Refund required.`);
       } else if (order.paymentModel === 'POSTPAID' && order.status !== 'SETTLED' && order.status !== 'CANCELLED') {
         // If a postpaid order receives a successful payment via Waiter generated link, it is instantly settled.
         await updateOrderStatus(null, order.storeId, order.id, 'SETTLED', true);
@@ -815,30 +822,40 @@ async function settleTableSession(actor, storeId, tableSessionId, isSystem = fal
     }
   });
 
-  if (activeOrders.length > 0) {
-    await prisma.order.updateMany({
-      where: {
-        tableSessionId,
-        status: { notIn: ['SETTLED', 'CANCELLED'] }
-      },
+  // Prepaid orders that were never paid must not be settled as if they were —
+  // cancel them; everything else on the tab is settled.
+  const unpaidIds = activeOrders.filter(o => UNPAID_STATUSES.includes(o.status)).map(o => o.id);
+  const settledIds = activeOrders.filter(o => !UNPAID_STATUSES.includes(o.status)).map(o => o.id);
+
+  const updatedSession = await prisma.$transaction(async (tx) => {
+    if (unpaidIds.length > 0) {
+      await tx.order.updateMany({ where: { id: { in: unpaidIds } }, data: { status: 'CANCELLED' } });
+    }
+    if (settledIds.length > 0) {
+      await tx.order.updateMany({ where: { id: { in: settledIds } }, data: { status: 'SETTLED' } });
+    }
+    return tx.tableSession.update({
+      where: { id: tableSessionId },
       data: { status: 'SETTLED' }
     });
-  }
-
-  const updatedSession = await prisma.tableSession.update({
-    where: { id: tableSessionId },
-    data: { status: 'SETTLED' }
   });
 
   for (const order of activeOrders) {
-    const settledOrder = { ...order, status: 'SETTLED' };
-    broadcastToStore(actualStoreId, 'ORDER_SETTLED', settledOrder);
-    if (order.customerId) broadcastToCustomer(order.customerId, 'ORDER_SETTLED', settledOrder);
-    if (order.sessionId) broadcastToCustomer(order.sessionId, 'ORDER_SETTLED', settledOrder);
+    const newStatus = unpaidIds.includes(order.id) ? 'CANCELLED' : 'SETTLED';
+    const updated = { ...order, status: newStatus };
+    broadcastToStore(actualStoreId, `ORDER_${newStatus}`, updated);
+    if (order.customerId) broadcastToCustomer(order.customerId, `ORDER_${newStatus}`, updated);
+    if (order.sessionId) broadcastToCustomer(order.sessionId, `ORDER_${newStatus}`, updated);
   }
   broadcastToStore(actualStoreId, 'TABLE_SESSION_SETTLED', { tableSessionId, tableId: session.tableId });
 
-  return { success: true, tableSessionId, settledOrdersCount: activeOrders.length, session: updatedSession };
+  return {
+    success: true,
+    tableSessionId,
+    settledOrdersCount: settledIds.length,
+    cancelledOrdersCount: unpaidIds.length,
+    session: updatedSession
+  };
 }
 
 async function generateSessionPaymentLink(actor, storeId, tableSessionId) {
@@ -850,7 +867,8 @@ async function generateSessionPaymentLink(actor, storeId, tableSessionId) {
     include: {
       table: true,
       orders: {
-        where: { status: { notIn: ['SETTLED', 'CANCELLED'] } }
+        // Only orders actually owed: exclude settled/cancelled and never-paid prepaid ones
+        where: { status: { notIn: ['SETTLED', 'CANCELLED', ...UNPAID_STATUSES] } }
       }
     }
   });
@@ -923,7 +941,7 @@ async function generateSessionPaymentLink(actor, storeId, tableSessionId) {
     await prisma.order.updateMany({
       where: {
         tableSessionId,
-        status: { notIn: ['SETTLED', 'CANCELLED'] }
+        status: { notIn: ['SETTLED', 'CANCELLED', ...UNPAID_STATUSES] }
       },
       data: {
         paymentLinkId: paymentLink.id,
@@ -1023,7 +1041,8 @@ async function getTableSessionBill(storeId, tableSessionId) {
     throw createHttpError(404, "Table session not found");
   }
 
-  const validOrders = session.orders.filter(o => o.status !== 'CANCELLED');
+  // Bill excludes cancelled orders and prepaid orders that were never paid
+  const validOrders = session.orders.filter(o => o.status !== 'CANCELLED' && !UNPAID_STATUSES.includes(o.status));
   const itemsMap = new Map();
 
   let subTotal = 0;
